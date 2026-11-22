@@ -1,4 +1,4 @@
-"""JARVIS AI — assistente pessoal em português do Brasil."""
+"""JARVIS — central pessoal de organização: tarefas, projetos, ideias, notas e lembretes."""
 from __future__ import annotations
 
 import logging
@@ -58,8 +58,8 @@ def create_app(config: dict | None = None) -> Flask:
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-    from . import api, assistant, auth, productivity, services_api, windows
-    for bp in (auth.bp, api.bp, assistant.bp, services_api.bp, productivity.bp, windows.bp):
+    from . import api, auth, productivity
+    for bp in (auth.bp, api.bp, productivity.bp):
         app.register_blueprint(bp)
 
     @app.teardown_appcontext
@@ -71,12 +71,12 @@ def create_app(config: dict | None = None) -> Flask:
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
         resp.headers.setdefault("X-Frame-Options", "DENY")
-        resp.headers.setdefault("Permissions-Policy", "microphone=(self), geolocation=(self), camera=()")
+        resp.headers.setdefault("Permissions-Policy", "microphone=(), geolocation=(), camera=()")
         resp.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob: https:; media-src 'self' data: blob:; connect-src 'self'; "
-            "frame-src https://open.spotify.com; object-src 'none'; base-uri 'none'; form-action 'self'",
+            "img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; "
+            "frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",
         )
         if on_https:
             resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
@@ -130,14 +130,6 @@ def create_app(config: dict | None = None) -> Flask:
 
     @app.get("/static/<path:path>")
     def static_files(path):
-        resp = send_from_directory(STATIC, path)
-        if path.startswith("windows/"):
-            resp.headers["Content-Disposition"] = f'attachment; filename="{Path(path).name}"'
-        return resp
-
-    @app.get("/download/jarvis_agent.py")
-    def agent_download():
-        return send_from_directory(ROOT / "windows_agent", "jarvis_agent.py", as_attachment=True,
-                                   mimetype="text/x-python")
+        return send_from_directory(STATIC, path)
 
     return app

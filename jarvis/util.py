@@ -9,24 +9,17 @@ from zoneinfo import ZoneInfo
 
 DEFAULT_SETTINGS = {
     "name": "",
-    "city": "São Paulo",
     "timezone": "America/Sao_Paulo",
-    "voice": "",
-    "voice_rate": 1.0,
-    "voice_pitch": 1.0,
-    "auto_speak": True,
-    "ai_enabled": True,
+    "theme": "auto",          # auto | claro | escuro
+    "accent": "#5b5bd6",
+    "start_view": "hoje",
+    "week_start": 0,          # 0 = domingo, 1 = segunda
     "pomodoro_focus": 25,
     "pomodoro_short": 5,
     "pomodoro_long": 15,
     "pomodoro_cycles": 4,
     "daily_focus_goal": 120,
     "break_reminder": 0,
-    "news_topic": "",
-    "spotify_embed": "",
-    "windows_apps": [],
-    "windows_sites": [],
-    "theme_accent": "#29b6ff",
 }
 
 

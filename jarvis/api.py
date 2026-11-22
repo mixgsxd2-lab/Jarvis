@@ -1,4 +1,5 @@
-"""API do Meu Espaço, Agenda, Memória, Configurações, exportação e notificações."""
+"""API da central: itens (tarefas, projetos, ideias, notas), agenda, lembretes, captura rápida,
+painel Hoje, configurações, exportação e notificações."""
 from __future__ import annotations
 
 import io
@@ -6,15 +7,14 @@ import json
 from datetime import datetime, timedelta
 
 from flask import Blueprint, Response, g, jsonify, request, send_file
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from . import push, scheduler
 from .auth import login_required, require_owner
-from .models import (Attachment, Command, Device, Event, FocusSession, Goal, Item,
-                     Memory, Message, Notification, PendingAction, PriceAlert,
-                     PushSubscription, Reminder, Routine, db, utcnow)
-from .util import (DEFAULT_SETTINGS, RECURRENCES, find_conflicts, iso, now_local,
-                   occurrences, parse_dt, user_settings)
+from .models import (Attachment, Event, FocusSession, Goal, Item, Notification,
+                     PushSubscription, Reminder, db, utcnow)
+from .util import (DEFAULT_SETTINGS, RECURRENCES, find_conflicts, fmt_dt, iso, now_local,
+                   occurrences, parse_dt, parse_when, user_settings)
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -32,6 +32,7 @@ def item_json(it: Item, with_children=False) -> dict:
         "id": it.id, "kind": it.kind, "title": it.title, "body": it.body, "status": it.status,
         "priority": it.priority, "due": iso(it.due), "tags": it.tags or [], "parent_id": it.parent_id,
         "origin_id": it.origin_id, "position": it.position, "done_at": iso(it.done_at),
+        "color": it.color or "", "pinned": bool(it.pinned),
         "created_at": iso(it.created_at), "updated_at": iso(it.updated_at),
     }
     if with_children:
@@ -64,10 +65,6 @@ def event_json(ev: Event) -> dict:
 def reminder_json(r: Reminder) -> dict:
     return {"id": r.id, "title": r.title, "at": iso(r.at), "kind": r.kind,
             "repeat": r.repeat, "done": r.done}
-
-
-def memory_json(m: Memory) -> dict:
-    return {"id": m.id, "content": m.content, "created_at": iso(m.created_at)}
 
 
 # ------------------------------------------------------------------ itens
@@ -103,6 +100,11 @@ def apply_item_fields(it: Item, data: dict) -> None:
             it.parent_id = None
     if "position" in data:
         it.position = int(data["position"] or 0)
+    if "color" in data:
+        c = str(data["color"] or "")
+        it.color = c[:20] if (not c or (c.startswith("#") and len(c) in (4, 7))) else it.color
+    if "pinned" in data:
+        it.pinned = bool(data["pinned"])
 
 
 def create_item(user_id: int, data: dict) -> Item:
@@ -135,7 +137,8 @@ def list_items():
     if text:
         like = f"%{text}%"
         q = q.where(or_(Item.title.ilike(like), Item.body.ilike(like)))
-    q = q.order_by(Item.status == "concluida", Item.priority.desc(), Item.updated_at.desc()).limit(500)
+    q = q.order_by(Item.status == "concluida", Item.pinned.is_(True).desc(), Item.priority.desc(),
+                   Item.updated_at.desc()).limit(1000)
     items = db.scalars(q).all()
     counts = {}
     if items:
@@ -145,10 +148,17 @@ def list_items():
             c[0] += 1
             if child.status == "concluida":
                 c[1] += 1
+    parents = {}
+    pids = {i.parent_id for i in items if i.parent_id}
+    if pids:
+        for p in db.scalars(select(Item).where(Item.id.in_(pids), Item.user_id == g.user.id)).all():
+            parents[p.id] = {"id": p.id, "kind": p.kind, "title": p.title, "color": p.color or ""}
     out = []
     for i in items:
         d = item_json(i)
         d["children_count"], d["children_done"] = counts.get(i.id, [0, 0])
+        if i.parent_id in parents:
+            d["parent"] = parents[i.parent_id]
         out.append(d)
     return jsonify(out)
 
@@ -210,7 +220,7 @@ def convert_item(user_id: int, item_id: int, to: str) -> Item:
     if to not in ("task", "project", "note", "idea"):
         raise ValueError("conversão inválida")
     new = Item(user_id=user_id, kind=to, title=src.title, body=src.body, tags=list(src.tags or []),
-               priority=src.priority, due=src.due, origin_id=src.id,
+               priority=src.priority, due=src.due, origin_id=src.id, color=src.color,
                status="nova" if to == "idea" else "pendente")
     db.add(new)
     db.flush()
@@ -281,22 +291,16 @@ def del_attachment(att_id):
 def search():
     text = request.args.get("q", "").strip()
     if len(text) < 2:
-        return jsonify({"items": [], "events": [], "memories": [], "messages": []})
+        return jsonify({"items": [], "events": [], "reminders": []})
     like = f"%{text}%"
     uid = g.user.id
     items = db.scalars(select(Item).where(Item.user_id == uid, or_(Item.title.ilike(like), Item.body.ilike(like)))
-                       .order_by(Item.updated_at.desc()).limit(50)).all()
+                       .order_by(Item.updated_at.desc()).limit(60)).all()
     events = db.scalars(select(Event).where(Event.user_id == uid, or_(Event.title.ilike(like), Event.notes.ilike(like),
                                                                        Event.location.ilike(like))).limit(30)).all()
-    mems = db.scalars(select(Memory).where(Memory.user_id == uid, Memory.content.ilike(like)).limit(30)).all()
-    msgs = db.scalars(select(Message).where(Message.user_id == uid, Message.content.ilike(like))
-                      .order_by(Message.id.desc()).limit(30)).all()
-    return jsonify({
-        "items": [item_json(i) for i in items],
-        "events": [event_json(e) for e in events],
-        "memories": [memory_json(m) for m in mems],
-        "messages": [{"id": m.id, "role": m.role, "content": m.content, "created_at": iso(m.created_at)} for m in msgs],
-    })
+    rems = db.scalars(select(Reminder).where(Reminder.user_id == uid, Reminder.title.ilike(like)).limit(30)).all()
+    return jsonify({"items": [item_json(i) for i in items], "events": [event_json(e) for e in events],
+                    "reminders": [reminder_json(r) for r in rems]})
 
 
 # ------------------------------------------------------------------ agenda
@@ -492,36 +496,6 @@ def del_reminder(rid):
     return jsonify({"ok": True})
 
 
-# ------------------------------------------------------------------ memória autorizada
-@bp.get("/memories")
-@login_required
-def list_memories():
-    ms = db.scalars(select(Memory).where(Memory.user_id == g.user.id).order_by(Memory.id.desc())).all()
-    return jsonify([memory_json(m) for m in ms])
-
-
-@bp.post("/memories")
-@login_required
-def add_memory():
-    # adicionar manualmente pelo painel já é a autorização explícita do usuário
-    content = str(body().get("content", "")).strip()[:2000]
-    if not content:
-        return jsonify({"error": "conteúdo vazio"}), 400
-    m = Memory(user_id=g.user.id, content=content)
-    db.add(m)
-    db.commit()
-    return jsonify(memory_json(m)), 201
-
-
-@bp.delete("/memories/<int:mid>")
-@login_required
-def del_memory(mid):
-    m = require_owner(db.get(Memory, mid))
-    db.delete(m)
-    db.commit()
-    return jsonify({"ok": True})
-
-
 # ------------------------------------------------------------------ configurações
 @bp.get("/settings")
 @login_required
@@ -585,17 +559,10 @@ def export():
         "attachments": rows(Attachment, lambda a: {**att_json(a), "data_base64": base64.b64encode(a.data).decode()}),
         "events": rows(Event, event_json),
         "reminders": rows(Reminder, reminder_json),
-        "memories": rows(Memory, memory_json),
-        "messages": rows(Message, lambda m: {"role": m.role, "content": m.content, "created_at": iso(m.created_at)}),
-        "routines": rows(Routine, lambda r: {"name": r.name, "time": r.time, "days": r.days, "actions": r.actions,
-                                             "enabled": r.enabled}),
         "focus_sessions": rows(FocusSession, lambda f: {"kind": f.kind, "minutes": f.minutes, "label": f.label,
                                                          "started_at": iso(f.started_at), "ended_at": iso(f.ended_at)}),
         "goals": rows(Goal, lambda x: {"title": x.title, "target": x.target, "current": x.current,
                                        "unit": x.unit, "period": x.period}),
-        "price_alerts": rows(PriceAlert, lambda a: {"symbol": a.symbol, "direction": a.direction, "price": a.price,
-                                                    "active": a.active}),
-        "devices": rows(Device, lambda d: {"name": d.name, "last_seen": iso(d.last_seen)}),
     }
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     stamp = datetime.now().strftime("%Y%m%d")
@@ -610,8 +577,7 @@ def delete_account():
     if not check_password_hash(g.user.password_hash, str(body().get("password", ""))):
         return jsonify({"error": "Senha incorreta."}), 400
     uid = g.user.id
-    for model in (Attachment, Command, Device, Item, Event, Reminder, Memory, Message, PendingAction,
-                  Notification, Routine, FocusSession, Goal, PriceAlert, PushSubscription):
+    for model in (Attachment, Item, Event, Reminder, Notification, FocusSession, Goal, PushSubscription):
         db.execute(delete(model).where(model.user_id == uid))
     db.delete(g.user)
     db.commit()
@@ -664,9 +630,127 @@ def push_test():
     return jsonify({"sent": sent})
 
 
-@bp.get("/pending")
+# ------------------------------------------------------------------ captura rápida
+CAPTURE_KINDS = ("task", "idea", "note", "project", "reminder", "event")
+
+
+def _capitalize(t: str) -> str:
+    t = t.strip(" .,;:-")
+    return t[:1].upper() + t[1:]
+
+
+def interpret_capture(user, text: str, kind: str) -> dict:
+    """Entende datas em português (“amanhã 10h”, “sexta”, “em 20 min”) sem IA, só com regras."""
+    now = now_local(user)
+    text = text.strip()
+    if kind in ("idea", "note", "project"):
+        first, _, rest = text.partition("\n")
+        return {"title": _capitalize(first)[:300], "body": rest.strip(), "when": None, "has_time": False}
+    dt, rest, has_time = parse_when(text, now)
+    title = _capitalize(rest or text)[:300]
+    if dt and kind == "task" and not has_time:
+        dt = dt.replace(hour=0, minute=0)
+    return {"title": title, "body": "", "when": dt, "has_time": has_time,
+            "label": (fmt_dt(dt, now) if has_time else fmt_dt(dt, now).split(" às")[0]) if dt else None}
+
+
+@bp.post("/capture")
 @login_required
-def list_pending():
-    ps = db.scalars(select(PendingAction).where(PendingAction.user_id == g.user.id,
-                                                PendingAction.status == "pending").order_by(PendingAction.id)).all()
-    return jsonify([{"id": p.id, "summary": p.summary, "action": p.action} for p in ps])
+def capture():
+    data = body()
+    text = str(data.get("text", "")).strip()[:2000]
+    kind = data.get("kind", "task")
+    if kind not in CAPTURE_KINDS:
+        return jsonify({"error": "tipo inválido"}), 400
+    if not text:
+        return jsonify({"error": "Escreva alguma coisa."}), 400
+    info = interpret_capture(g.user, text, kind)
+    if data.get("dry_run"):
+        return jsonify({"title": info["title"], "when": iso(info["when"]), "label": info.get("label")})
+    if not info["title"]:
+        return jsonify({"error": "Faltou o título."}), 400
+    try:
+        if kind in ("task", "idea", "note", "project"):
+            payload = {"kind": kind, "title": info["title"], "body": info["body"]}
+            if kind == "task":
+                payload["due"] = iso(info["when"])
+                if data.get("project_id"):
+                    payload["parent_id"] = data["project_id"]
+            if data.get("priority") is not None:
+                payload["priority"] = data["priority"]
+            it = create_item(g.user.id, payload)
+            return jsonify({"type": "item", "item": item_json(it)}), 201
+        if not info["when"]:
+            return jsonify({"error": "Diga quando: por exemplo “amanhã às 10h”, “sexta 15h” ou “em 30 min”."}), 400
+        if kind == "reminder":
+            r = create_reminder(g.user.id, {"title": info["title"], "at": iso(info["when"]),
+                                            "kind": data.get("reminder_kind", "lembrete")})
+            return jsonify({"type": "reminder", "reminder": reminder_json(r)}), 201
+        start = info["when"]
+        ev, conflicts = create_event(g.user.id, {"title": info["title"], "start": iso(start),
+                                                 "end": iso(start + timedelta(hours=1)), "reminder_minutes": 15})
+        return jsonify({"type": "event", "event": event_json(ev), "conflicts": conflicts}), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# ------------------------------------------------------------------ painel Hoje
+@bp.get("/today")
+@login_required
+def today():
+    uid = g.user.id
+    now = now_local(g.user)
+    day0 = now.replace(hour=0, minute=0, second=0)
+    day1 = day0 + timedelta(days=1)
+    week = day0 + timedelta(days=8)
+
+    open_tasks = db.scalars(select(Item).where(Item.user_id == uid, Item.kind.in_(("task", "subtask")),
+                                               Item.status != "concluida")).all()
+    parents = {p.id: p for p in db.scalars(select(Item).where(Item.user_id == uid, Item.kind.in_(("project", "task")))).all()}
+
+    def tj(t):
+        d = item_json(t)
+        p = parents.get(t.parent_id)
+        if p:
+            d["parent"] = {"id": p.id, "kind": p.kind, "title": p.title, "color": p.color or ""}
+        return d
+
+    overdue = sorted([t for t in open_tasks if t.due and t.due < day0], key=lambda t: t.due)
+    due_today = sorted([t for t in open_tasks if t.due and day0 <= t.due < day1], key=lambda t: (t.due, -t.priority))
+    upcoming = sorted([t for t in open_tasks if t.due and day1 <= t.due < week], key=lambda t: t.due)
+    no_date = [t for t in open_tasks if not t.due and t.kind == "task"]
+    important = sorted([t for t in no_date if t.priority >= 2], key=lambda t: -t.priority)[:5]
+
+    agenda = []
+    for ev in db.scalars(select(Event).where(Event.user_id == uid, Event.start < day1)).all():
+        for s, e in occurrences(ev, day0, day1):
+            agenda.append({"type": "event", "id": ev.id, "title": ev.title, "start": iso(s), "end": iso(e),
+                           "all_day": ev.all_day, "location": ev.location})
+    for r in db.scalars(select(Reminder).where(Reminder.user_id == uid, Reminder.done.is_(False),
+                                               Reminder.at >= day0, Reminder.at < day1)).all():
+        agenda.append({"type": "reminder", "id": r.id, "title": r.title, "start": iso(r.at), "kind": r.kind})
+    agenda.sort(key=lambda x: (not x.get("all_day"), x["start"]))
+
+    projects = []
+    for p in db.scalars(select(Item).where(Item.user_id == uid, Item.kind == "project",
+                                           Item.status.in_(("pendente", "andamento")))
+                        .order_by(Item.updated_at.desc())).all():
+        kids = [k for k in db.scalars(select(Item).where(Item.parent_id == p.id)).all()]
+        projects.append({**item_json(p), "children_count": len(kids),
+                         "children_done": sum(1 for k in kids if k.status == "concluida")})
+
+    ideas = db.scalars(select(Item).where(Item.user_id == uid, Item.kind == "idea", Item.status.in_(("nova", "avaliando")))
+                       .order_by(Item.updated_at.desc()).limit(6)).all()
+    done_today = db.scalar(select(func.count(Item.id)).where(Item.user_id == uid, Item.done_at.is_not(None),
+                                                             Item.done_at >= utcnow() - timedelta(hours=now.hour, minutes=now.minute))) or 0
+    focus = sum(f.minutes for f in db.scalars(select(FocusSession).where(FocusSession.user_id == uid,
+                                                                         FocusSession.kind == "foco",
+                                                                         FocusSession.started_at >= day0)).all())
+    return jsonify({
+        "now": iso(now), "overdue": [tj(t) for t in overdue], "today": [tj(t) for t in due_today],
+        "upcoming": [tj(t) for t in upcoming], "important": [tj(t) for t in important],
+        "agenda": agenda, "projects": projects[:6], "ideas": [item_json(i) for i in ideas],
+        "counts": {"open": len(open_tasks), "no_date": len(no_date), "done_today": done_today,
+                   "projects": len(projects)},
+        "focus": {"today": round(focus, 1), "goal": user_settings(g.user)["daily_focus_goal"]},
+    })

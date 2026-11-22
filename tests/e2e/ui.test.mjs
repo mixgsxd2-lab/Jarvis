@@ -1,5 +1,5 @@
 // Verificação dos botões principais em navegador real (Chromium + Playwright).
-// Uso: node tests/e2e/ui.test.mjs   (o script sobe o servidor de teste sozinho)
+// Uso: node tests/e2e/ui.test.mjs   (sobe o servidor de teste sozinho)
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -15,197 +15,190 @@ const SHOTS = process.env.SHOTS_DIR || '';
 const server = spawn('python3', [path.join(here, 'serve.py'), String(PORT)], { stdio: ['ignore', 'ignore', 'pipe'] });
 let serverLog = '';
 server.stderr.on('data', (d) => { serverLog += d; });
-const stop = () => { try { server.kill(); } catch (_) {} };
 
 async function waitServer() {
   for (let i = 0; i < 60; i++) {
-    try { const r = await fetch(BASE + '/healthz'); if (r.ok) return; } catch (_) {}
+    try { if ((await fetch(BASE + '/healthz')).ok) return; } catch (_) {}
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error('servidor não subiu\n' + serverLog);
 }
-
-// Microfone e voz simulados: o reconhecimento “ouve” a frase definida em window.__say.
-const voiceStub = () => {
-  window.__spoken = [];
-  class FakeRec {
-    start() {
-      setTimeout(() => {
-        const text = window.__say || 'que horas são';
-        const res = [[{ transcript: text }]]; res[0].isFinal = true;
-        this.onresult && this.onresult({ resultIndex: 0, results: res });
-        this.onend && this.onend();
-      }, 150);
-    }
-    stop() { this.onend && this.onend(); }
-  }
-  window.SpeechRecognition = FakeRec; window.webkitSpeechRecognition = FakeRec;
-  const synth = { speaking: false, getVoices: () => [], cancel() {}, speak(u) { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 10); } };
-  Object.defineProperty(window, 'speechSynthesis', { value: synth });
-  window.SpeechSynthesisUtterance = function (t) { this.text = t; };
-};
-
 const results = [];
+let curPage = null;
 async function step(name, fn) {
-  try { await fn(); results.push(['✔', name]); } catch (e) { results.push(['✘', name, e.message.split('\n')[0]]); }
+  try { await fn(); results.push(['✔', name]); } catch (e) {
+    results.push(['✘', name, e.message.split('\n')[0]]);
+    if (SHOTS && curPage) await curPage.screenshot({ path: `${SHOTS}/falha-${results.length}.png` }).catch(() => {});
+  }
 }
-const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
+const expect = (c, m) => { if (!c) throw new Error(m); };
+const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` }); };
 
-async function run(page, label) {
+async function mobile(page) {
+  curPage = page;
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|favicon/.test(m.text())) errors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
 
-  await step(`[${label}] cadastro e login`, async () => {
+  await step('[celular] criar conta e entrar', async () => {
     await page.goto(BASE);
-    await page.waitForSelector('#login:not([hidden])');
-    if (await page.isVisible('#toggle-signup') && (await page.textContent('#login-btn')).includes('Entrar')) await page.click('#toggle-signup');
+    await page.waitForSelector('.login-card');
     await page.fill('input[name=username]', 'tony');
+    await page.fill('input[name=name]', 'Tony');
     await page.fill('input[name=password]', 'senha-forte-123');
     await page.click('#login-btn');
-    await page.waitForSelector('#home:not([hidden])');
-    expect(await page.isVisible('#orb') && await page.isVisible('#mic'), 'orbe/microfone não visíveis');
-  });
-  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${label}-home.png` });
-
-  await step(`[${label}] microfone: fala → resposta falada`, async () => {
-    await page.evaluate(() => { window.__say = 'que horas são'; });
-    await page.click('#mic');
-    await page.waitForFunction(() => /Agora são/.test(document.querySelector('#caption').textContent));
-    await page.waitForFunction(() => window.__spoken.some((t) => /Agora são/.test(t)));
+    await page.waitForSelector('.hello');
   });
 
-  await step(`[${label}] microfone: criar tarefa com confirmação`, async () => {
-    await page.evaluate(() => { window.__say = 'crie uma tarefa testar o jarvis amanhã às 9h'; });
-    await page.click('#mic');
-    await page.waitForSelector('#caption .pending');
-    await page.click('#caption .pending .btn.ok');
-    await page.waitForFunction(() => /criada/.test(document.querySelector('#caption').textContent));
+  await step('[celular] adicionar tarefa rápida no Hoje (com data em português)', async () => {
+    await page.fill('.capture-inline input', 'Enviar relatório hoje às 23h');
+    await page.click('.capture-inline button[type=submit]');
+    await page.waitForSelector('.row-item >> text=Enviar relatório');
   });
 
-  await step(`[${label}] tocar no JARVIS abre o menu`, async () => {
-    await page.click('#orb');
-    await page.waitForSelector('#menu:not([hidden])');
-    expect((await page.$$('.tile')).length === 7, 'menu sem 7 painéis');
-  });
-  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${label}-menu.png` });
-
-  const panels = ['assistente', 'espaco', 'agenda', 'servicos', 'produtividade', 'windows', 'config'];
-  for (const p of panels) {
-    await step(`[${label}] abrir painel ${p}`, async () => {
-      await page.goto(`${BASE}/#menu`);
-      await page.click(`.tile[data-panel=${p}]`);
-      await page.waitForSelector('#panel:not([hidden])');
-      await page.waitForFunction(() => !/Carregando…|Erro ao abrir/.test(document.querySelector('#panel-body').textContent.slice(0, 40)));
-      await page.waitForTimeout(250);
-      expect(!/Erro ao abrir/.test(await page.textContent('#panel-body')), 'erro ao abrir painel');
-      if (SHOTS) await page.screenshot({ path: `${SHOTS}/${label}-${p}.png` });
-    });
-  }
-
-  await step(`[${label}] assistente: texto + memória`, async () => {
-    await page.goto(`${BASE}/#assistente`);
-    await page.fill('.composer input', 'lembre que eu gosto de café');
-    await page.click('.composer button[type=submit]');
-    await page.waitForSelector('.chat .pending');
-    await page.click('.chat .pending .btn.ok');
-    await page.waitForFunction(() => /Guardado/.test(document.querySelector('.chat').textContent));
-    await page.click('.tab[data-tab=mem]');
-    await page.waitForFunction(() => /gosto de café/.test(document.querySelector('#panel-body').textContent));
+  await step('[celular] botão + abre captura e cria ideia', async () => {
+    await page.click('.fab');
+    await page.click('.seg button:has-text("Ideia")');
+    await page.fill('.capture-box textarea', 'App para dividir contas');
+    await page.click('.capture-box button[type=submit]');
+    await page.waitForSelector('.toast >> text=Ideia guardada');
   });
 
-  await step(`[${label}] Meu Espaço: criar, salvar automático, subtarefa, ideia → projeto`, async () => {
-    await page.goto(`${BASE}/#espaco`);
-    await page.waitForSelector('.li');
-    expect(/Testar o jarvis/i.test(await page.textContent('#panel-body')), 'tarefa criada por voz não aparece');
-    await page.click('.li >> text=/Testar o jarvis/i');
-    await page.fill('textarea', 'Detalhes salvos automaticamente');
-    await page.waitForFunction(() => /Salvo/.test(document.querySelector('#save-state').textContent), null, { timeout: 5000 });
-    await page.fill('input[placeholder="Nova subtarefa…"]', 'Sub 1');
-    await page.press('input[placeholder="Nova subtarefa…"]', 'Enter');
-    await page.waitForSelector('.list .li >> text=Sub 1');
-    await page.click('.tab[data-tab=idea]');
-    await page.fill('input[placeholder="Nova ideia…"]', 'Ideia brilhante');
-    await page.press('input[placeholder="Nova ideia…"]', 'Enter');
-    await page.waitForSelector('text=→ Transformar em projeto');
-    await page.click('text=→ Transformar em projeto');
-    await page.waitForSelector('text=Criado a partir de:');
+  await step('[celular] captura de compromisso mostra prévia da data', async () => {
+    await page.click('.fab');
+    await page.click('.seg button:has-text("Compromisso")');
+    await page.fill('.capture-box textarea', 'Dentista amanhã 14h30');
+    await page.waitForFunction(() => /Amanhã|amanhã/.test(document.querySelector('.capture-preview').textContent));
+    await page.click('.capture-box button[type=submit]');
+    await page.waitForSelector('.toast >> text=Compromisso agendado');
+  });
+  await page.waitForTimeout(400);
+  await shot(page, 'm-hoje');
+
+  await step('[celular] concluir tarefa pelo círculo', async () => {
+    await page.click('.bottom-nav a[data-view=tarefas]');
+    await page.waitForSelector('.row-item >> text=Enviar relatório');
+    await page.click('.row-item:has-text("Enviar relatório") .tick');
+    await page.waitForSelector('.toast >> text=Concluída');
   });
 
-  await step(`[${label}] Agenda: novo compromisso + conflito`, async () => {
-    await page.goto(`${BASE}/#agenda`);
-    for (const [title, start] of [['Consulta', '2031-03-10T10:00'], ['Outra', '2031-03-10T10:30']]) {
-      await page.click('text=+ Compromisso');
-      await page.fill('.modal-card input[name=title]', title);
-      await page.fill('.modal-card input[name=start]', start);
-      await page.fill('.modal-card input[name=end]', start.replace(/T(\d\d)/, (m, h) => `T${String(+h + 1).padStart(2, '0')}`));
-      await page.click('.modal-card button[type=submit]');
-      if (title === 'Outra') {
-        await page.waitForSelector('.modal-card >> text=/Conflito de horário/');
-        await page.click('.modal-card .btn.primary');
-      }
-      await page.waitForSelector('#modal[hidden]', { state: 'attached' });
-    }
-    await page.waitForSelector('.li >> text=Outra');
+  await step('[celular] detalhes: salvar automático + subtarefa', async () => {
+    await page.click('.chip:has-text("Concluídas")');
+    await page.click('.row-item:has-text("Enviar relatório") .t');
+    await page.waitForSelector('.drawer');
+    await page.fill('.drawer label.f textarea', 'Incluir gráficos do trimestre');
+    await page.waitForFunction(() => /Salvo/.test(document.querySelector('.save-state').textContent), null, { timeout: 5000 });
+    await page.fill('.drawer input[placeholder="Adicionar subtarefa…"]', 'Revisar números');
+    await page.press('.drawer input[placeholder="Adicionar subtarefa…"]', 'Enter');
+    await page.waitForSelector('.drawer .subtasks >> text=Revisar números');
+    await shot(page, 'm-detalhe');
+    await page.click('.drawer [aria-label=Fechar]');
   });
 
-  await step(`[${label}] Serviços: cotações, gráfico e conversor`, async () => {
-    await page.goto(`${BASE}/#servicos`);
-    await page.waitForSelector('.quote');
-    expect((await page.$$('.quote')).length === 4, 'faltam cotações');
-    await page.waitForSelector('svg.chart path');
-    await page.waitForFunction(() => /US\$ 19,61/.test(document.body.textContent));
-    await page.click('.tab[data-tab=weather]');
-    await page.waitForSelector('text=Predomínio de sol');
+  await step('[celular] ideia vira projeto mantendo a original', async () => {
+    await page.click('.bottom-nav button[data-view=mais]');
+    await page.click('.modal a:has-text("Ideias")');
+    await page.waitForSelector('.idea >> text=App para dividir contas');
+    await page.click('.idea button:has-text("→ Projeto")');
+    await page.waitForSelector('.toast >> text=Virou projeto');
+    await page.click('.chip:has-text("Viraram")');
+    await page.waitForSelector('.idea >> text=App para dividir contas');
   });
 
-  await step(`[${label}] Produtividade: Pomodoro iniciar/pausar`, async () => {
-    await page.goto(`${BASE}/#produtividade`);
-    await page.click('button:has-text("Iniciar")');
-    await page.waitForTimeout(1300);
+  await step('[celular] projeto: quadro com tarefas e mover entre colunas', async () => {
+    await page.click('.bottom-nav a[data-view=projetos]');
+    await page.click('.project-card:has-text("App para dividir contas")');
+    await page.waitForSelector('.board');
+    await page.click('.column[data-status=pendente] button:has-text("Adicionar tarefa")');
+    await page.fill('.capture-box textarea', 'Desenhar telas');
+    await page.click('.capture-box button[type=submit]');
+    await page.waitForSelector('.kcard >> text=Desenhar telas');
+    await page.click('.kcard:has-text("Desenhar telas") button:has-text("Fazendo →")');
+    await page.waitForSelector('.column[data-status=andamento] .kcard >> text=Desenhar telas');
+    await shot(page, 'm-projeto');
+  });
+
+  await step('[celular] agenda mostra compromisso e cria lembrete', async () => {
+    await page.click('.bottom-nav a[data-view=agenda]');
+    await page.waitForSelector('.cal');
+    await page.click('.topbar button:has-text("Lembrete")');
+    await page.fill('.modal input[name=title]', 'Tomar remédio');
+    await page.click('.modal button[type=submit]');
+    await page.waitForSelector('.toast >> text=Lembrete criado');
+  });
+
+  await step('[celular] foco: iniciar e pausar Pomodoro', async () => {
+    await page.goto(`${BASE}/#foco`);
+    await page.click('button:has-text("Começar")');
+    await page.waitForTimeout(1200);
     await page.click('button:has-text("Pausar")');
     await page.waitForSelector('button:has-text("Continuar")');
-    await page.click('.tab[data-tab=hist]');
-    await page.waitForSelector('text=Relatórios em PDF');
   });
 
-  await step(`[${label}] Configurações: salvar cidade`, async () => {
-    await page.goto(`${BASE}/#config`);
-    const city = page.locator('label:has-text("Cidade (clima)") input');
-    await city.fill('Recife');
-    await page.click('text=Salvar preferências');
-    await page.waitForSelector('.toast >> text=Configurações salvas');
+  await step('[celular] anotações: criar e salvar', async () => {
+    await page.goto(`${BASE}/#notas`);
+    await page.click('.topbar button:has-text("Nova")');
+    await page.fill('.note-editor .title-input', 'Lista de compras');
+    await page.fill('.note-editor textarea', 'Arroz, feijão');
+    await page.waitForFunction(() => /Salvo/.test(document.querySelector('.note-editor .save-state').textContent), null, { timeout: 5000 });
   });
 
-  await step(`[${label}] sem erros de JavaScript`, async () => { expect(!errors.length, errors.join(' | ')); });
+  await step('[celular] buscar encontra itens', async () => {
+    await page.goto(`${BASE}/#buscar`);
+    await page.fill('.capture-inline input', 'compras');
+    await page.waitForSelector('.row-item >> text=Lista de compras');
+  });
+
+  await step('[celular] ajustes: tema escuro', async () => {
+    await page.goto(`${BASE}/#ajustes`);
+    await page.click('.seg button:has-text("Escuro")');
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    await page.goto(`${BASE}/#hoje`);
+    await page.waitForSelector('.hello');
+    await page.waitForTimeout(300);
+    await shot(page, 'm-hoje-escuro');
+    await page.goto(`${BASE}/#ajustes`);
+    await page.click('.seg button:has-text("Automático")');
+  });
+
+  await step('[celular] sem erros de JavaScript', async () => expect(!errors.length, errors.join(' | ')));
 }
 
 try {
   await waitServer();
   const browser = await chromium.launch();
   const phone = await browser.newContext({ ...devices['Pixel 7'], locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });
-  await phone.addInitScript(voiceStub);
-  await run(await phone.newPage(), 'celular');
-  const desk = await browser.newContext({ viewport: { width: 1280, height: 820 }, locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });
-  await desk.addInitScript(voiceStub);
-  const p2 = await desk.newPage();
-  await p2.goto(BASE);
-  await p2.waitForSelector('#login:not([hidden])');
-  await step('[computador] login com conta existente', async () => {
-    await p2.fill('input[name=username]', 'tony');
-    await p2.fill('input[name=password]', 'senha-forte-123');
-    await p2.click('#login-btn');
-    await p2.waitForSelector('#home:not([hidden])');
+  await mobile(await phone.newPage());
+  const desk = await browser.newContext({ viewport: { width: 1360, height: 860 }, locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });
+  const p = await desk.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await step('[computador] login e barra lateral com todas as seções', async () => {
+    await p.goto(BASE);
+    await p.fill('input[name=username]', 'tony');
+    await p.fill('input[name=password]', 'senha-forte-123');
+    await p.click('#login-btn');
+    await p.waitForSelector('.sidebar .nav a[data-view=ideias]');
+    expect((await p.$$('.sidebar .nav a[data-view]')).length === 9, 'faltam seções');
+    await p.waitForSelector('.side-projects a');
   });
-  if (SHOTS) {
-    await p2.screenshot({ path: `${SHOTS}/computador-home.png` });
-    await p2.goto(`${BASE}/#servicos`); await p2.waitForSelector('svg.chart path'); await p2.screenshot({ path: `${SHOTS}/computador-servicos.png` });
-    await p2.goto(`${BASE}/#agenda`); await p2.waitForSelector('.cal'); await p2.screenshot({ path: `${SHOTS}/computador-agenda.png` });
+  await step('[computador] atalho N abre captura', async () => {
+    await p.keyboard.press('n');
+    await p.waitForSelector('.capture-box');
+    await p.keyboard.press('Escape');
+  });
+  for (const v of ['hoje', 'tarefas', 'projetos', 'ideias', 'notas', 'agenda', 'foco', 'buscar', 'ajustes']) {
+    await step(`[computador] abrir ${v}`, async () => {
+      await p.click(`.sidebar a[data-view=${v}]`);
+      await p.waitForFunction(() => !/Carregando…|Erro ao abrir/.test(document.querySelector('#main').textContent.slice(0, 30)));
+      await p.waitForTimeout(250);
+      await shot(p, `d-${v}`);
+    });
   }
+  await step('[computador] sem erros de JavaScript', async () => expect(!errors.length, errors.join(' | ')));
   await browser.close();
-} catch (e) {
-  results.push(['✘', 'execução', e.message]);
-} finally { stop(); }
+} catch (e) { results.push(['✘', 'execução', e.message]); }
+finally { server.kill(); }
 
 for (const r of results) console.log(r.join(' '));
 const failed = results.filter((r) => r[0] === '✘').length;

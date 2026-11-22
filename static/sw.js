@@ -1,11 +1,11 @@
-/* Service worker do JARVIS: funciona offline (interface), recebe notificações push. */
-const VERSION = 'jarvis-v1';
+/* Service worker da central JARVIS: abre offline (interface) e recebe notificações push. */
+const VERSION = 'jarvis-v2';
 const SHELL = [
-  '/', '/static/css/app.css', '/static/js/app.js', '/static/js/core.js', '/static/js/voice.js',
-  '/static/js/p-assistant.js', '/static/js/p-space.js', '/static/js/p-agenda.js', '/static/js/p-services.js',
-  '/static/js/p-productivity.js', '/static/js/p-windows.js', '/static/js/p-settings.js',
-  '/static/icons/icon-192.png', '/static/icons/icon-512.png', '/static/icons/apple-touch-icon.png',
-  '/manifest.webmanifest'
+  '/', '/static/css/app.css', '/static/js/app.js', '/static/js/core.js', '/static/js/item.js',
+  '/static/js/v-today.js', '/static/js/v-tasks.js', '/static/js/v-projects.js', '/static/js/v-ideas.js',
+  '/static/js/v-notes.js', '/static/js/v-agenda.js', '/static/js/v-focus.js', '/static/js/v-search.js',
+  '/static/js/v-settings.js', '/static/icons/icon-192.png', '/static/icons/icon-512.png',
+  '/static/icons/apple-touch-icon.png', '/manifest.webmanifest'
 ];
 
 self.addEventListener('install', (e) => {

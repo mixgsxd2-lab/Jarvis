@@ -1,10 +1,11 @@
-"""Modelos do banco de dados do JARVIS (SQLite local ou PostgreSQL)."""
+"""Modelos do banco de dados da central JARVIS (SQLite local ou PostgreSQL)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from sqlalchemy import (JSON, Boolean, DateTime, Float, ForeignKey, Integer,
-                        LargeBinary, String, Text, UniqueConstraint, create_engine)
+                        LargeBinary, String, Text, UniqueConstraint, create_engine,
+                        inspect, text)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
                             scoped_session, sessionmaker)
 
@@ -48,6 +49,8 @@ class Item(Base):
     parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     origin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    pinned: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -95,32 +98,7 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-class Memory(Base):
-    __tablename__ = "memories"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    content: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
-
-class Message(Base):
-    __tablename__ = "messages"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    role: Mapped[str] = mapped_column(String(20))
-    content: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
-class PendingAction(Base):
-    """Alterações propostas pelo assistente que aguardam confirmação."""
-    __tablename__ = "pending_actions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    action: Mapped[dict] = mapped_column(JSON)
-    summary: Mapped[str] = mapped_column(String(500))
-    status: Mapped[str] = mapped_column(String(20), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Notification(Base):
@@ -135,18 +113,6 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     __table_args__ = (UniqueConstraint("user_id", "key", name="uq_notif_key"),)
 
-
-class Routine(Base):
-    __tablename__ = "routines"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    name: Mapped[str] = mapped_column(String(200))
-    time: Mapped[str] = mapped_column(String(5), default="07:00")
-    days: Mapped[list] = mapped_column(JSON, default=lambda: [0, 1, 2, 3, 4])
-    actions: Mapped[list] = mapped_column(JSON, default=list)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_run: Mapped[str] = mapped_column(String(10), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class FocusSession(Base):
@@ -172,41 +138,7 @@ class Goal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-class PriceAlert(Base):
-    __tablename__ = "price_alerts"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    symbol: Mapped[str] = mapped_column(String(20))
-    direction: Mapped[str] = mapped_column(String(10))  # acima | abaixo
-    price: Mapped[float] = mapped_column(Float)
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
-    triggered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
-
-class Device(Base):
-    """Computadores Windows conectados pelo agente opcional."""
-    __tablename__ = "devices"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    name: Mapped[str] = mapped_column(String(100))
-    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    info: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
-class Command(Base):
-    __tablename__ = "commands"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
-    type: Mapped[str] = mapped_column(String(30))
-    payload: Mapped[dict] = mapped_column(JSON, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="pendente")
-    result: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class PushSubscription(Base):
@@ -218,14 +150,6 @@ class PushSubscription(Base):
     auth: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
-
-class UserSecret(Base):
-    __tablename__ = "user_secrets"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = _uid()
-    name: Mapped[str] = mapped_column(String(50))
-    value: Mapped[dict] = mapped_column(JSON, default=dict)
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_secret"),)
 
 
 class AppConfig(Base):
@@ -249,9 +173,22 @@ def init_db(url: str):
         kwargs["connect_args"] = {"check_same_thread": False}
     engine = create_engine(url, **kwargs)
     Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
     db.remove()
     db.configure(bind=engine)
     return engine
+
+
+def _add_missing_columns(engine) -> None:
+    """Migração simples: acrescenta colunas novas (sempre opcionais) em bancos já existentes."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in existing and col.nullable:
+                    ctype = col.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {ctype}'))
 
 
 def get_config(key: str, default: str | None = None) -> str | None:

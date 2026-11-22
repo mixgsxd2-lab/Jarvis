@@ -1,4 +1,4 @@
-"""Produtividade: rotinas automáticas, Pomodoro/foco, metas e relatórios em PDF."""
+"""Foco: Pomodoro, metas e relatórios em PDF."""
 from __future__ import annotations
 
 import io
@@ -7,101 +7,11 @@ from datetime import datetime, timedelta
 from flask import Blueprint, g, jsonify, request, send_file
 from sqlalchemy import select
 
-from . import scheduler
 from .auth import login_required, require_owner
-from .models import utcnow, FocusSession, Goal, Item, Routine, db
+from .models import FocusSession, Goal, Item, db, utcnow
 from .util import DIAS_NOME, iso, now_local, parse_dt, user_settings
 
 bp = Blueprint("productivity", __name__, url_prefix="/api")
-
-ROUTINE_ACTIONS = ("briefing", "message", "task", "focus")
-
-
-def routine_json(r: Routine) -> dict:
-    return {"id": r.id, "name": r.name, "time": r.time, "days": r.days, "actions": r.actions,
-            "enabled": r.enabled, "last_run": r.last_run}
-
-
-def apply_routine(r: Routine, data: dict) -> None:
-    if "name" in data:
-        r.name = str(data["name"] or "Rotina")[:200]
-    if "time" in data:
-        t = str(data["time"])
-        hh, mm = t.split(":")[:2]
-        if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
-            raise ValueError("horário inválido")
-        r.time = f"{int(hh):02d}:{int(mm):02d}"
-    if "days" in data:
-        r.days = sorted({int(d) for d in data["days"] if 0 <= int(d) <= 6})
-    if "actions" in data:
-        acts = []
-        for a in data["actions"] or []:
-            if a.get("type") in ROUTINE_ACTIONS:
-                acts.append({"type": a["type"], "value": str(a.get("value") or "")[:300]})
-        r.actions = acts
-    if "enabled" in data:
-        r.enabled = bool(data["enabled"])
-
-
-@bp.get("/routines")
-@login_required
-def list_routines():
-    rows = db.scalars(select(Routine).where(Routine.user_id == g.user.id).order_by(Routine.time)).all()
-    return jsonify([routine_json(r) for r in rows])
-
-
-@bp.post("/routines")
-@login_required
-def add_routine():
-    r = Routine(user_id=g.user.id, name="Rotina", time="07:00", days=[0, 1, 2, 3, 4],
-                actions=[{"type": "briefing", "value": ""}], enabled=True, last_run="")
-    try:
-        apply_routine(r, request.get_json(silent=True) or {})
-    except (ValueError, TypeError):
-        return jsonify({"error": "dados inválidos"}), 400
-    db.add(r)
-    db.commit()
-    return jsonify(routine_json(r)), 201
-
-
-@bp.patch("/routines/<int:rid>")
-@login_required
-def patch_routine(rid):
-    r = require_owner(db.get(Routine, rid))
-    try:
-        apply_routine(r, request.get_json(silent=True) or {})
-    except (ValueError, TypeError):
-        return jsonify({"error": "dados inválidos"}), 400
-    db.commit()
-    return jsonify(routine_json(r))
-
-
-@bp.delete("/routines/<int:rid>")
-@login_required
-def del_routine(rid):
-    r = require_owner(db.get(Routine, rid))
-    db.delete(r)
-    db.commit()
-    return jsonify({"ok": True})
-
-
-@bp.post("/routines/<int:rid>/run")
-@login_required
-def run_routine_now(rid):
-    r = require_owner(db.get(Routine, rid))
-    stamp = now_local(g.user).strftime("%Y-%m-%dT%H:%M:%S")
-    previous = r.last_run
-    scheduler.run_routine(g.user, r, "manual-" + stamp)
-    r.last_run = previous  # execução manual não impede a execução agendada de hoje
-    db.commit()
-    return jsonify({"ok": True})
-
-
-@bp.get("/briefing")
-@login_required
-def get_briefing():
-    return jsonify({"text": scheduler.briefing(g.user)})
-
 
 # ------------------------------------------------------------------ foco
 @bp.post("/focus")
@@ -245,7 +155,7 @@ def build_report(user, days: int) -> bytes:
     stats = focus_stats(user, days)
     now = now_local(user)
     start = now - timedelta(days=days - 1)
-    blue = colors.HexColor("#0b6fd6")
+    blue = colors.HexColor("#5b5bd6")
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=blue)
     h2 = ParagraphStyle("h2", parent=styles["Heading2"], textColor=blue)
@@ -261,7 +171,7 @@ def build_report(user, days: int) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=1.6 * cm,
                             title="Relatório de produtividade - JARVIS")
-    el = [Paragraph("J.A.R.V.I.S. — Relatório de produtividade", h1),
+    el = [Paragraph("JARVIS — Relatório de organização", h1),
           Paragraph(f"Período: {start.strftime('%d/%m/%Y')} a {now.strftime('%d/%m/%Y')} ({days} dias) · "
                     f"gerado em {now.strftime('%d/%m/%Y %H:%M')}", normal), Spacer(1, 12)]
 
@@ -305,6 +215,21 @@ def build_report(user, days: int) -> bytes:
         gt.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), blue), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#9bbbe0"))]))
         el += [Paragraph("Metas", h2), gt, Spacer(1, 12)]
+
+    projects = db.scalars(select(Item).where(Item.user_id == user.id, Item.kind == "project",
+                                             Item.status != "concluida")).all()
+    if projects:
+        rows = [["Projeto", "Tarefas", "Progresso", "Prazo"]]
+        for p in projects:
+            kids = db.scalars(select(Item).where(Item.parent_id == p.id)).all()
+            ok = sum(1 for k in kids if k.status == "concluida")
+            pct = f"{ok / len(kids) * 100:.0f}%" if kids else "—"
+            rows.append([Paragraph(_esc(p.title or "(sem título)"), normal), f"{ok}/{len(kids)}", pct,
+                         p.due.strftime("%d/%m/%Y") if p.due else "—"])
+        pt = Table(rows, colWidths=[8 * cm, 2.5 * cm, 2.5 * cm, 3 * cm])
+        pt.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), blue), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#9bbbe0"))]))
+        el += [Paragraph("Projetos em andamento", h2), pt, Spacer(1, 12)]
 
     if done:
         el.append(Paragraph("Tarefas concluídas no período", h2))
