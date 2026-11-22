@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>JARVIS AI</title>
+  <meta name="description" content="Assistente pessoal em português do Brasil">
+  <meta name="theme-color" content="#030b17">
+  <meta name="color-scheme" content="dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="JARVIS">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/static/icons/favicon.png">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <!-- Login -->
+  <main id="login" class="screen" hidden>
+    <div class="login-card glass">
+      <div class="mini-orb" aria-hidden="true"><span></span></div>
+      <h1 class="brand">J.A.R.V.I.S.</h1>
+      <p class="muted" id="login-sub">Acesso seguro</p>
+      <form id="login-form" autocomplete="on">
+        <label>Usuário<input name="username" autocomplete="username" required minlength="3" maxlength="40" autocapitalize="none" spellcheck="false"></label>
+        <label id="name-field" hidden>Seu nome (opcional)<input name="name" maxlength="60" autocomplete="given-name"></label>
+        <label>Senha<input name="password" type="password" autocomplete="current-password" required minlength="8"></label>
+        <p class="error" id="login-error" role="alert"></p>
+        <button class="btn primary wide" type="submit" id="login-btn">Entrar</button>
+        <button class="btn ghost wide" type="button" id="toggle-signup" hidden>Criar conta</button>
+      </form>
+    </div>
+  </main>
+
+  <!-- Tela inicial: só o JARVIS -->
+  <main id="home" class="screen" hidden>
+    <div class="orb-stage">
+      <button id="orb" class="orb" aria-label="Abrir menu do JARVIS" title="Tocar para abrir o menu">
+        <svg viewBox="0 0 200 200" aria-hidden="true">
+          <defs>
+            <radialGradient id="core" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#ffffff"/>
+              <stop offset="35%" stop-color="#bfeaff"/>
+              <stop offset="70%" stop-color="#29b6ff" stop-opacity=".55"/>
+              <stop offset="100%" stop-color="#29b6ff" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <circle class="ring r0" cx="100" cy="100" r="96"/>
+          <g class="spin s1"><circle class="ring r1" cx="100" cy="100" r="86"/></g>
+          <g class="spin s2"><circle class="ring r2" cx="100" cy="100" r="74"/></g>
+          <g class="spin s3"><circle class="ring r3" cx="100" cy="100" r="62"/></g>
+          <g class="spin s4"><circle class="ring r4" cx="100" cy="100" r="50"/></g>
+          <circle class="core-glow" cx="100" cy="100" r="44" fill="url(#core)"/>
+          <circle class="core" cx="100" cy="100" r="16"/>
+        </svg>
+      </button>
+      <button id="mic" class="mic" aria-label="Falar com o JARVIS" title="Falar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+      </button>
+    </div>
+    <div id="caption" class="caption" aria-live="polite"></div>
+    <form id="home-text" class="home-text" hidden>
+      <input name="text" placeholder="Digite ou use o microfone do teclado…" autocomplete="off" enterkeyhint="send">
+      <button class="btn primary" type="submit">Enviar</button>
+    </form>
+  </main>
+
+  <!-- Menu de painéis -->
+  <nav id="menu" class="menu" hidden aria-label="Painéis">
+    <div class="menu-grid">
+      <a href="#assistente" class="tile" data-panel="assistente"><span class="ti">◉</span><b>Assistente</b><small>Conversa, voz e memória</small></a>
+      <a href="#espaco" class="tile" data-panel="espaco"><span class="ti">▦</span><b>Meu Espaço</b><small>Tarefas, ideias e projetos</small></a>
+      <a href="#agenda" class="tile" data-panel="agenda"><span class="ti">▤</span><b>Agenda</b><small>Compromissos e alarmes</small></a>
+      <a href="#servicos" class="tile" data-panel="servicos"><span class="ti">◈</span><b>Serviços</b><small>Clima, notícias, cotações</small></a>
+      <a href="#produtividade" class="tile" data-panel="produtividade"><span class="ti">◷</span><b>Produtividade</b><small>Pomodoro, metas, rotinas</small></a>
+      <a href="#windows" class="tile" data-panel="windows"><span class="ti">▣</span><b>Windows</b><small>Controle do computador</small></a>
+      <a href="#config" class="tile" data-panel="config"><span class="ti">⚙</span><b>Configurações</b><small>Voz, cidade e dados</small></a>
+    </div>
+    <button class="btn ghost close-menu" id="close-menu">Fechar</button>
+  </nav>
+
+  <!-- Painel -->
+  <section id="panel" class="panel" hidden>
+    <header class="panel-head">
+      <button class="icon-btn" id="panel-back" aria-label="Voltar">‹</button>
+      <h2 id="panel-title"></h2>
+      <span id="save-state" class="save-state" aria-live="polite"></span>
+    </header>
+    <div id="panel-body" class="panel-body"></div>
+  </section>
+
+  <div id="float-timer" class="float-timer" hidden></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="modal" class="modal" hidden><div class="modal-card glass" role="dialog" aria-modal="true"></div></div>
+</body>
+</html>

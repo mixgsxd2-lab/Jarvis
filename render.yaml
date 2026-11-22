@@ -1,0 +1,28 @@
+# Blueprint do Render (plano gratuito). No painel: New > Blueprint > selecione este repositório.
+services:
+  - type: web
+    name: jarvis-ai
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CRON_SECRET
+        generateValue: true
+      - key: DATABASE_URL        # recomendado: Postgres gratuito (Neon, Supabase ou Render)
+        sync: false
+      - key: ANTHROPIC_API_KEY   # opcional: conversa livre com IA
+        sync: false
+      - key: SPOTIFY_CLIENT_ID   # opcional
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: ALLOW_SIGNUP        # deixe vazio: só o primeiro cadastro é permitido
+        sync: false
