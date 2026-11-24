@@ -14,8 +14,6 @@ services:
         value: 3.12.8
       - key: SECRET_KEY
         generateValue: true
-      - key: CRON_SECRET
-        generateValue: true
       - key: DATABASE_URL        # recomendado: Postgres gratuito (Neon, Supabase ou Render)
         sync: false
       - key: ALLOW_SIGNUP        # deixe vazio: só o primeiro cadastro é permitido

@@ -12,7 +12,6 @@ from sqlalchemy import func, select
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .models import User, db
-from .util import DEFAULT_SETTINGS, user_settings
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -94,7 +93,7 @@ def _validate(username: str, password: str):
 
 
 def public_user(user: User) -> dict:
-    return {"id": user.id, "username": user.username, "settings": user_settings(user)}
+    return {"id": user.id, "username": user.username}
 
 
 @bp.get("/state")
@@ -119,12 +118,7 @@ def register():
         return jsonify({"error": err}), 400
     if db.scalar(select(User).where(User.username == username)):
         return jsonify({"error": "Esse usuário já existe."}), 409
-    settings = dict(DEFAULT_SETTINGS)
-    if data.get("name"):
-        settings["name"] = str(data["name"])[:60]
-    if data.get("timezone"):
-        settings["timezone"] = str(data["timezone"])[:60]
-    user = User(username=username, password_hash=generate_password_hash(password), settings=settings)
+    user = User(username=username, password_hash=generate_password_hash(password), settings={})
     db.add(user)
     db.commit()
     _start_session(user)

@@ -1,4 +1,4 @@
-"""JARVIS — central pessoal de organização: tarefas, projetos, ideias, notas e lembretes."""
+"""JARVIS — lista simples de ideias para não esquecer."""
 from __future__ import annotations
 
 import logging
@@ -46,9 +46,8 @@ def create_app(config: dict | None = None) -> Flask:
         SESSION_COOKIE_SECURE=on_https,
         SESSION_COOKIE_NAME="jarvis_session",
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
-        MAX_CONTENT_LENGTH=6 * 1024 * 1024,
+        MAX_CONTENT_LENGTH=256 * 1024,
         ALLOW_SIGNUP=os.environ.get("ALLOW_SIGNUP", "").lower() in ("1", "true", "sim", "yes"),
-        CRON_SECRET=os.environ.get("CRON_SECRET", ""),
         JSON_AS_ASCII=False,
     )
     app.config.update({k: v for k, v in config.items() if k != "DATABASE_URL"})
@@ -58,8 +57,8 @@ def create_app(config: dict | None = None) -> Flask:
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-    from . import api, auth, productivity
-    for bp in (auth.bp, api.bp, productivity.bp):
+    from . import auth, ideas
+    for bp in (auth.bp, ideas.bp):
         app.register_blueprint(bp)
 
     @app.teardown_appcontext
@@ -90,10 +89,6 @@ def create_app(config: dict | None = None) -> Flask:
             return jsonify({"error": "não encontrado"}), 404
         return send_from_directory(STATIC, "index.html")
 
-    @app.errorhandler(413)
-    def _too_big(_e):
-        return jsonify({"error": "Arquivo grande demais (máx. 5 MB)."}), 413
-
     @app.errorhandler(500)
     def _err(_e):
         db.rollback()
@@ -102,16 +97,6 @@ def create_app(config: dict | None = None) -> Flask:
     @app.get("/healthz")
     def health():
         return {"ok": True}
-
-    @app.route("/cron/tick", methods=["GET", "POST"])
-    def cron_tick():
-        """Chamado por um agendador externo (cron-job.org etc.) para lembretes com o app fechado."""
-        from .scheduler import process_all
-        key = request.args.get("key") or request.headers.get("X-Cron-Key", "")
-        secret = app.config["CRON_SECRET"]
-        if not secret or not secrets.compare_digest(key, secret):
-            return jsonify({"error": "não autorizado"}), 403
-        return jsonify(process_all())
 
     @app.get("/")
     def index():

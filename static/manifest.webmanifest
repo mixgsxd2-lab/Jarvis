@@ -1,19 +1,15 @@
 {
-  "name": "JARVIS — Central de organização",
-  "short_name": "JARVIS",
-  "description": "Tarefas, projetos, ideias, anotações e lembretes em um só lugar",
+  "name": "Ideias",
+  "short_name": "Ideias",
+  "description": "Anote suas ideias em tópicos para não esquecer",
   "lang": "pt-BR",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "any",
-  "background_color": "#f6f6f8",
-  "theme_color": "#5b5bd6",
-  "categories": [
-    "productivity",
-    "utilities"
-  ],
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/static/icons/icon-192.png",
@@ -32,48 +28,6 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "Hoje",
-      "url": "/#hoje",
-      "icons": [
-        {
-          "src": "/static/icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
-    },
-    {
-      "name": "Tarefas",
-      "url": "/#tarefas",
-      "icons": [
-        {
-          "src": "/static/icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
-    },
-    {
-      "name": "Ideias",
-      "url": "/#ideias",
-      "icons": [
-        {
-          "src": "/static/icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
-    },
-    {
-      "name": "Agenda",
-      "url": "/#agenda",
-      "icons": [
-        {
-          "src": "/static/icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
     }
   ]
 }

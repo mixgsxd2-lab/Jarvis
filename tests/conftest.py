@@ -7,7 +7,7 @@ from jarvis.auth import reset_attempts
 @pytest.fixture
 def app():
     reset_attempts()
-    return create_app({"DATABASE_URL": "sqlite://", "SECRET_KEY": "teste", "TESTING": True, "CRON_SECRET": "cron123"})
+    return create_app({"DATABASE_URL": "sqlite://", "SECRET_KEY": "teste", "TESTING": True})
 
 
 @pytest.fixture
@@ -38,12 +38,12 @@ class Authed:
     def delete(self, url, json=None):
         return self.c.delete(url, json=json, headers=self._h())
 
-    def capture(self, text, kind="task", **extra):
-        return self.post("/api/capture", json={"text": text, "kind": kind, **extra})
+    def add(self, text):
+        return self.post("/api/ideias", json={"text": text})
 
 
 @pytest.fixture
 def user(client):
-    r = client.post("/api/auth/register", json={"username": "tony", "password": "senha-forte-123", "name": "Tony"})
+    r = client.post("/api/auth/register", json={"username": "tony", "password": "senha-forte-123"})
     assert r.status_code == 200
     return Authed(client, r.json["csrf"])
